@@ -1,6 +1,7 @@
 import { sha256 } from '@noble/hashes/sha256'
 import { randomBytes, concatBytes, utf8ToBytes } from '@noble/hashes/utils'
 import { ed25519 as curve, edwardsToMontgomeryPub, edwardsToMontgomeryPriv, x25519 } from '@noble/curves/ed25519'
+import { xchacha20poly1305 as cipher } from '@noble/ciphers/chacha'
 
 export interface Actor {
   nickname: string,
@@ -235,12 +236,22 @@ export default class ActorManager {
     }
   }
 
-  async noncedSecret(nonce: Uint8Array) : Promise<Uint8Array> {
+  async oneTimePrivateKey(nonce: Uint8Array) : Promise<Uint8Array> {
     if (nonce.byteLength < 24) {
       throw "Nonce is too short"
     }
     const actor = await this.getChosenActor()
     return sha256(concatBytes(nonce, base64Decode(actor.rootSecretBase64)))
+  }
+
+  async oneTimePublicKey(nonce: Uint8Array) : Promise<Uint8Array> {
+    const privateKey = await this.oneTimePrivateKey(nonce)
+    return curve.getPublicKey(privateKey)
+  }
+
+  async oneTimeSignature(message: Uint8Array, nonce: Uint8Array) : Promise<Uint8Array> {
+    const privateKey = await this.oneTimePrivateKey(nonce)
+    return curve.sign(message, privateKey)
   }
 
   async sign(message: Uint8Array) : Promise<Uint8Array> {
@@ -253,6 +264,23 @@ export default class ActorManager {
     const myPriv = edwardsToMontgomeryPriv(deriveSigningPrivateKey(myActor.rootSecretBase64))
     const theirPub = edwardsToMontgomeryPub(actorURIDecode(theirURI))
     return x25519.getSharedSecret(myPriv, theirPub)
+  }
+
+  async encryptPrivateMessage(plaintext: Uint8Array, theirURI: string) : Promise<Uint8Array> {
+    const sharedSecret = await this.sharedSecret(theirURI)
+    const nonce = randomBytes(24)
+    const encrypted = cipher(sharedSecret, nonce).encrypt(plaintext)
+    return concatBytes(nonce, encrypted)
+  }
+
+  async decryptPrivateMessage(ciphertextWithNonce: Uint8Array, theirURI: string) : Promise<Uint8Array> {
+    const sharedSecret = await this.sharedSecret(theirURI)
+    if (ciphertextWithNonce.length < 24) {
+      throw "Ciphertext is too short"
+    } 
+    const nonce = ciphertextWithNonce.slice(0, 24)
+    const ciphertext = ciphertextWithNonce.slice(24)
+    return cipher(sharedSecret, nonce).decrypt(ciphertext)
   }
 
   async onChannelMessage({data} : {data: ChannelMessage}) : Promise<void> {

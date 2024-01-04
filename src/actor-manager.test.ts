@@ -180,28 +180,73 @@ describe('Actor Manager', ()=> {
     expect(gotten.length).toEqual(0)
   })
 
-  it('generate nonced secret', async()=> {
+  it('generate one time public keys', async()=> {
     const am = new ActorManager()
     const uri = await am.createActor(crypto.randomUUID())
     await am.chooseActor(uri)
 
     const nonce = randomBytes(24)
 
-    const secret1 = await am.noncedSecret(nonce)
-    const secret2 = await am.noncedSecret(nonce)
+    const pk1 = await am.oneTimePublicKey(nonce)
+    const pk2 = await am.oneTimePublicKey(nonce)
 
     // Make sure they're equal
-    Object.entries(secret1).forEach(([i, v])=> {
-      expect(secret2[i]).toEqual(v)
+    Object.entries(pk1).forEach(([i, v])=> {
+      expect(pk2[i]).toEqual(v)
     })
 
     // Make sure a secret with a different nonce is different
-    const secret3 = await am.noncedSecret(randomBytes(24))
+    const pk3 = await am.oneTimePublicKey(randomBytes(24))
     let equal = true
-    Object.entries(secret1).forEach(([i, v])=> {
-      equal &&= secret3[i] == v
+    Object.entries(pk1).forEach(([i, v])=> {
+      equal &&= pk3[i] == v
     })
     assert(!equal)
+  })
+
+  it('one time signature same nonce', async()=> {
+    const am = new ActorManager()
+    const uri = await am.createActor(crypto.randomUUID())
+    await am.chooseActor(uri)
+
+    // Works with the same nonce
+    const nonce = randomBytes(24)
+    const pk = await am.oneTimePublicKey(nonce)
+    const message = randomBytes(100)
+    const sig = await am.oneTimeSignature(message, nonce)
+    assert(curve.verify(sig, message, pk))
+  })
+
+  it('one time signature different nonce', async()=> {
+    const am = new ActorManager()
+    const uri = await am.createActor(crypto.randomUUID())
+    await am.chooseActor(uri)
+
+    // Doesn't work with different nonces
+    const nonce1 = randomBytes(24)
+    const nonce2 = randomBytes(24)
+    const pk = await am.oneTimePublicKey(nonce1)
+    const message = randomBytes(100)
+    const sig = await am.oneTimeSignature(message, nonce2)
+    assert(!curve.verify(sig, message, pk))
+  })
+
+  it('one time signature different users', async()=> {
+    const am = new ActorManager()
+    const nonce = randomBytes(24)
+
+    // Generate pk from one user
+    const uri1 = await am.createActor(crypto.randomUUID())
+    await am.chooseActor(uri1)
+    const pk = await am.oneTimePublicKey(nonce)
+
+    // And sig from the other
+    const uri2 = await am.createActor(crypto.randomUUID())
+    await am.chooseActor(uri2)
+    const message = randomBytes(100)
+    const sig = await am.oneTimeSignature(message, nonce)
+
+    assert(!curve.verify(sig, message, pk))
   })
 
   it('sign', async()=> {
@@ -231,6 +276,26 @@ describe('Actor Manager', ()=> {
     for (const [i, byte] of Object.entries(secret1)) {
       expect(byte).toEqual(secret2[i])
     }
+  })
+
+  it('encrypt and decrypt private messages', async()=> {
+    const am1 = new ActorManager()
+    const uri1 = await am1.createActor(crypto.randomUUID())
+    await am1.chooseActor(uri1)
+
+    const am2 = new ActorManager(new EventTarget(), 'example.com')
+    const uri2 = await am2.createActor(crypto.randomUUID())
+    await am2.chooseActor(uri2)
+
+    const message = randomBytes(100)
+    const encrypted = await am1.encryptPrivateMessage(message, uri2)
+
+    const decrypted1 = await am1.decryptPrivateMessage(encrypted, uri2)
+    const decrypted2 = await am2.decryptPrivateMessage(encrypted, uri1)
+
+    // Make sure they are both equal
+    expect(base64Encode(message)).toEqual(base64Encode(decrypted1))
+    expect(base64Encode(message)).toEqual(base64Encode(decrypted2))
   })
 
   it('Backchannel actor', async ()=> {
